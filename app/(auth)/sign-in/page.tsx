@@ -1,12 +1,7 @@
+import AuthForm from "@/components/AuthForm";
 
-import AuthForm from '@/components/AuthForm';
-
-const SignInPage = () => {
-    return (
-        <main className="flex justify-center items-center min-h-screen">
-            <AuthForm type="sign-in" />
-        </main>
-    );
+const Page = () => {
+    return <AuthForm type="sign-in" />;
 };
 
-export default SignInPage;
+export default Page;

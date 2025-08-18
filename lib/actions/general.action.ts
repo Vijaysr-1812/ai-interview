@@ -1,4 +1,3 @@
-/*
 "use server";
 
 import { generateObject } from "ai";
@@ -124,4 +123,3 @@ export async function getInterviewsByUserId(
         ...doc.data(),
     })) as Interview[];
 }
-*/
