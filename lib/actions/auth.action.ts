@@ -41,15 +41,14 @@ export async function signUp(params: SignUpParams) {
         await db.collection("users").doc(uid).set({
             name,
             email,
-            // profileURL,
-            // resumeURL,
         });
 
         return {
             success: true,
-            message: "Account created successfully. Please sign in.",
+            message: "Account created successfully. Please verify your email.",
         };
-    } catch (error: any) {
+    } catch (err) {
+        const error = err as { code?: string };
         console.error("Error creating user:", error);
 
         // Handle Firebase specific errors
@@ -78,9 +77,23 @@ export async function signIn(params: SignInParams) {
                 message: "User does not exist. Create an account.",
             };
 
+        // Verify the ID token and check email verification status
+        const decodedToken = await auth.verifyIdToken(idToken);
+        if (!decodedToken.email_verified) {
+            return {
+                success: false,
+                message: "Please verify your email before signing in.",
+            };
+        }
+
         await setSessionCookie(idToken);
-    } catch (error: any) {
-        console.log("");
+
+        return {
+            success: true,
+            message: "Signed in successfully.",
+        };
+    } catch (err) {
+        console.error("Error signing in:", err);
 
         return {
             success: false,
@@ -116,9 +129,10 @@ export async function getCurrentUser(): Promise<User | null> {
         return {
             ...userRecord.data(),
             id: userRecord.id,
+            emailVerified: decodedClaims.email_verified ?? false,
         } as User;
     } catch (error) {
-        console.log(error);
+        console.error("Error verifying session:", error);
 
         // Invalid or expired session
         return null;

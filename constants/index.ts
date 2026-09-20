@@ -1,4 +1,3 @@
-import { CreateAssistantDTO } from "@vapi-ai/web/dist/api";
 import { z } from "zod";
 
 export const mappings = {
@@ -97,96 +96,95 @@ export const mappings = {
     "aws amplify": "amplify",
 };
 
-export const interviewer: CreateAssistantDTO = {
-    name: "Interviewer",
-    firstMessage:
-        "Hello! Thank you for taking the time to speak with me today. I'm excited to learn more about you and your experience.",
-    transcriber: {
-        provider: "deepgram",
-        model: "nova-2",
-        language: "en",
-    },
-    voice: {
-        provider: "11labs",
-        voiceId: "sarah",
-        stability: 0.4,
-        similarityBoost: 0.8,
-        speed: 0.9,
-        style: 0.5,
-        useSpeakerBoost: true,
-    },
-    model: {
-        provider: "openai",
-        model: "gpt-4",
-        messages: [
-            {
-                role: "system",
-                content: `You are a professional job interviewer conducting a real-time voice interview with a candidate. Your goal is to assess their qualifications, motivation, and fit for the role.
+/**
+ * System prompt for the Gemini-powered AI interviewer.
+ * Placeholders: {{questions}}, {{role}}, {{level}}, {{techstack}}
+ */
+export const INTERVIEW_SYSTEM_PROMPT = `You are a professional job interviewer conducting a real-time voice interview with a candidate applying for a {{level}} {{role}} position. The relevant tech stack is: {{techstack}}.
+
+Your goal is to assess their qualifications, motivation, and fit for the role.
 
 Interview Guidelines:
-Follow the structured question flow:
+1. Follow the structured question flow:
 {{questions}}
 
-Engage naturally & react appropriately:
-Listen actively to responses and acknowledge them before moving forward.
-Ask brief follow-up questions if a response is vague or requires more detail.
-Keep the conversation flowing smoothly while maintaining control.
-Be professional, yet warm and welcoming:
+2. Engage naturally & react appropriately:
+   - Listen actively to responses and acknowledge them before moving forward.
+   - Ask brief follow-up questions if a response is vague or requires more detail.
+   - Keep the conversation flowing smoothly while maintaining control.
 
-Use official yet friendly language.
-Keep responses concise and to the point (like in a real voice interview).
-Avoid robotic phrasing—sound natural and conversational.
-Answer the candidate’s questions professionally:
+3. Be professional, yet warm and welcoming:
+   - Use official yet friendly language.
+   - Keep responses concise and to the point (1-3 sentences max — this is a voice conversation).
+   - Avoid robotic phrasing — sound natural and conversational.
+   - Do NOT use markdown, bullet points, or special characters in your responses.
 
-If asked about the role, company, or expectations, provide a clear and relevant answer.
-If unsure, redirect the candidate to HR for more details.
+4. Answer the candidate's questions professionally:
+   - If asked about the role, company, or expectations, provide a clear and relevant answer.
+   - If unsure, redirect the candidate to HR for more details.
 
-Conclude the interview properly:
-Thank the candidate for their time.
-Inform them that the company will reach out soon with feedback.
-End the conversation on a polite and positive note.
+5. Conclude the interview properly:
+   - After all questions have been asked, thank the candidate for their time.
+   - Inform them that the company will reach out soon with feedback.
+   - End with a clear closing statement like "This concludes our interview. Thank you!"
 
+IMPORTANT: Keep ALL your responses short (1-3 sentences). This is a voice conversation — long responses are not appropriate. Never use markdown formatting, asterisks, bullet points, or numbered lists in your responses.`;
 
-- Be sure to be professional and polite.
-- Keep all your responses short and simple. Use official language, but be kind and welcoming.
-- This is a voice conversation, so keep your responses short, like in a real conversation. Don't ramble for too long.`,
-            },
-        ],
-    },
-};
+export const INTERVIEW_GREETING = `Hello! Thank you for taking the time to speak with me today. I'm excited to learn more about you and your experience. Let's get started with the first question.`;
 
 export const feedbackSchema = z.object({
-    totalScore: z.number(),
-    categoryScores: z.tuple([
-        z.object({
-            name: z.literal("Communication Skills"),
-            score: z.number(),
-            comment: z.string(),
-        }),
-        z.object({
-            name: z.literal("Technical Knowledge"),
-            score: z.number(),
-            comment: z.string(),
-        }),
-        z.object({
-            name: z.literal("Problem Solving"),
-            score: z.number(),
-            comment: z.string(),
-        }),
-        z.object({
-            name: z.literal("Cultural Fit"),
-            score: z.number(),
-            comment: z.string(),
-        }),
-        z.object({
-            name: z.literal("Confidence and Clarity"),
-            score: z.number(),
-            comment: z.string(),
-        }),
+    totalScore: z.number().min(0).max(100),
+    performanceBand: z.enum([
+        "Excellent",
+        "Good",
+        "Average",
+        "Below Average",
+        "Needs Improvement",
     ]),
-    strengths: z.array(z.string()),
-    areasForImprovement: z.array(z.string()),
+    categoryScores: z.array(
+        z.object({
+            name: z.string(),
+            score: z.number().min(0).max(100),
+            comment: z.string(),
+            subMetrics: z.array(
+                z.object({
+                    name: z.string(),
+                    score: z.number().min(0).max(100),
+                })
+            ),
+        })
+    ),
+    strengths: z.array(
+        z.object({
+            point: z.string(),
+            example: z.string(),
+        })
+    ),
+    areasForImprovement: z.array(
+        z.object({
+            point: z.string(),
+            suggestion: z.string(),
+            resourceType: z.enum(["practice", "study", "behavior"]),
+            priority: z.enum(["high", "medium", "low"]),
+        })
+    ),
+    detailedSuggestions: z.object({
+        immediateActions: z.array(z.string()),
+        shortTermGoals: z.array(z.string()),
+        longTermDevelopment: z.array(z.string()),
+    }),
+    sampleIdealAnswers: z
+        .array(
+            z.object({
+                question: z.string(),
+                candidateAnswer: z.string(),
+                idealAnswer: z.string(),
+                gap: z.string(),
+            })
+        )
+        .max(3),
     finalAssessment: z.string(),
+    hiringRecommendation: z.enum(["Strong Hire", "Hire", "Maybe", "No Hire"]),
 });
 
 export const interviewCovers = [

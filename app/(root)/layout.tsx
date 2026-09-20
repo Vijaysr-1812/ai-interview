@@ -1,24 +1,16 @@
-import Link from "next/link";
-import Image from "next/image";
 import { ReactNode } from "react";
-import { redirect } from "next/navigation";
-
-import { isAuthenticated } from "@/lib/actions/auth.action";
+import { getCurrentUser } from "@/lib/actions/auth.action";
+import Navbar from "@/components/Navbar";
 
 const Layout = async ({ children }: { children: ReactNode }) => {
-    const isUserAuthenticated = await isAuthenticated();
-    if (!isUserAuthenticated) redirect("/sign-in");
+    const user = await getCurrentUser();
 
     return (
-        <div className="root-layout">
-            <nav>
-                <Link href="/" className="flex items-center gap-2">
-                    <Image src="/logo.svg" alt="MockMate Logo" width={38} height={32} />
-                    <h2 className="text-primary-100">Intuiprep</h2>
-                </Link>
-            </nav>
-
-            {children}
+        <div className="min-h-screen flex flex-col bg-dark-100 text-light-100">
+            <Navbar user={user} />
+            <main className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 flex flex-col gap-10">
+                {children}
+            </main>
         </div>
     );
 };

@@ -2,14 +2,39 @@ interface Feedback {
     id: string;
     interviewId: string;
     totalScore: number;
+    performanceBand: "Excellent" | "Good" | "Average" | "Below Average" | "Needs Improvement";
     categoryScores: Array<{
         name: string;
         score: number;
         comment: string;
+        subMetrics: Array<{
+            name: string;
+            score: number;
+        }>;
     }>;
-    strengths: string[];
-    areasForImprovement: string[];
+    strengths: Array<{
+        point: string;
+        example: string;
+    }>;
+    areasForImprovement: Array<{
+        point: string;
+        suggestion: string;
+        resourceType: "practice" | "study" | "behavior";
+        priority: "high" | "medium" | "low";
+    }>;
+    detailedSuggestions: {
+        immediateActions: string[];
+        shortTermGoals: string[];
+        longTermDevelopment: string[];
+    };
+    sampleIdealAnswers: Array<{
+        question: string;
+        candidateAnswer: string;
+        idealAnswer: string;
+        gap: string;
+    }>;
     finalAssessment: string;
+    hiringRecommendation: "Strong Hire" | "Hire" | "Maybe" | "No Hire";
     createdAt: string;
 }
 
@@ -36,6 +61,7 @@ interface User {
     name: string;
     email: string;
     id: string;
+    emailVerified?: boolean;
 }
 
 interface InterviewCardProps {
@@ -52,8 +78,10 @@ interface AgentProps {
     userId?: string;
     interviewId?: string;
     feedbackId?: string;
-    type: "generate" | "interview";
     questions?: string[];
+    role?: string;
+    level?: string;
+    techstack?: string[];
 }
 
 interface RouteParams {
@@ -80,7 +108,6 @@ interface SignUpParams {
     uid: string;
     name: string;
     email: string;
-    password: string;
 }
 
 type FormType = "sign-in" | "sign-up";

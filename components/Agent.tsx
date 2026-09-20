@@ -1,164 +1,431 @@
 "use client";
 
 import Image from "next/image";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 
 import { cn } from "@/lib/utils";
-import { vapi } from "@/lib/vapi.sdk";
-import { interviewer } from "@/constants";
+import { INTERVIEW_GREETING } from "@/constants";
 import { createFeedback } from "@/lib/actions/general.action";
+import {
+    startListening,
+    stopListening,
+    speak,
+    cancelSpeech,
+    isSpeechRecognitionSupported,
+    isSpeechSynthesisSupported,
+} from "@/lib/speech";
 
-enum CallStatus {
-    INACTIVE = "INACTIVE",
-    CONNECTING = "CONNECTING",
-    ACTIVE = "ACTIVE",
+enum InterviewState {
+    IDLE = "IDLE",
+    GREETING = "GREETING",
+    LISTENING = "LISTENING",
+    PROCESSING = "PROCESSING",
+    SPEAKING = "SPEAKING",
     FINISHED = "FINISHED",
 }
 
-interface SavedMessage {
-    role: "user" | "system" | "assistant";
+interface ChatMessage {
+    role: "user" | "assistant";
     content: string;
 }
 
 const Agent = ({
-                   userName,
-                   userId,
-                   interviewId,
-                   feedbackId,
-                   type,
-                   questions,
-               }: AgentProps) => {
+    userName,
+    userId,
+    interviewId,
+    feedbackId,
+    questions,
+    role,
+    level,
+    techstack,
+}: AgentProps) => {
     const router = useRouter();
-    const [callStatus, setCallStatus] = useState<CallStatus>(CallStatus.INACTIVE);
-    const [messages, setMessages] = useState<SavedMessage[]>([]);
-    const [isSpeaking, setIsSpeaking] = useState(false);
-    const [lastMessage, setLastMessage] = useState<string>("");
+    const [state, setState] = useState<InterviewState>(InterviewState.IDLE);
+    const [messages, setMessages] = useState<ChatMessage[]>([]);
+    const [currentTranscript, setCurrentTranscript] = useState("");
+    const [isSupported, setIsSupported] = useState(true);
+    const transcriptRef = useRef<HTMLDivElement>(null);
+    const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
+    const lastTranscriptRef = useRef<string>("");
+    const isProcessingRef = useRef<boolean>(false);
+    const messagesRef = useRef<ChatMessage[]>([]);
 
+    // Keep messagesRef in sync with messages
     useEffect(() => {
-        const onCallStart = () => {
-            setCallStatus(CallStatus.ACTIVE);
-        };
+        messagesRef.current = messages;
+    }, [messages]);
 
-        const onCallEnd = () => {
-            setCallStatus(CallStatus.FINISHED);
-        };
+    // Auto-scroll transcript
+    useEffect(() => {
+        if (transcriptRef.current) {
+            transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight;
+        }
+    }, [messages, currentTranscript]);
 
-        const onMessage = (message: Message) => {
-            if (message.type === "transcript" && message.transcriptType === "final") {
-                const newMessage = { role: message.role, content: message.transcript };
-                setMessages((prev) => [...prev, newMessage]);
-            }
-        };
+    // Check browser support
+    useEffect(() => {
+        if (!isSpeechRecognitionSupported() || !isSpeechSynthesisSupported()) {
+            setIsSupported(false);
+        }
+    }, []);
 
-        const onSpeechStart = () => {
-            console.log("speech start");
-            setIsSpeaking(true);
-        };
-
-        const onSpeechEnd = () => {
-            console.log("speech end");
-            setIsSpeaking(false);
-        };
-
-        const onError = (error: Error) => {
-            console.log("Error:", error);
-        };
-
-        vapi.on("call-start", onCallStart);
-        vapi.on("call-end", onCallEnd);
-        vapi.on("message", onMessage);
-        vapi.on("speech-start", onSpeechStart);
-        vapi.on("speech-end", onSpeechEnd);
-        vapi.on("error", onError);
-
+    // Cleanup on unmount
+    useEffect(() => {
         return () => {
-            vapi.off("call-start", onCallStart);
-            vapi.off("call-end", onCallEnd);
-            vapi.off("message", onMessage);
-            vapi.off("speech-start", onSpeechStart);
-            vapi.off("speech-end", onSpeechEnd);
-            vapi.off("error", onError);
+            stopListening();
+            cancelSpeech();
+            if (silenceTimerRef.current) {
+                clearTimeout(silenceTimerRef.current);
+            }
         };
     }, []);
 
+    // Handle interview completion
     useEffect(() => {
-        if (messages.length > 0) {
-            setLastMessage(messages[messages.length - 1].content);
-        }
+        if (state !== InterviewState.FINISHED) return;
+        if (messages.length === 0) return;
 
-        const handleGenerateFeedback = async (messages: SavedMessage[]) => {
-            console.log("handleGenerateFeedback");
+        const handleFinish = async () => {
+            if (!interviewId || !userId) {
+                router.push("/");
+                return;
+            }
 
-            const { success, feedbackId: id } = await createFeedback({
-                interviewId: interviewId!,
-                userId: userId!,
-                transcript: messages,
-                feedbackId,
-            });
+            try {
+                const transcript = messages.map((m) => ({
+                    role: m.role,
+                    content: m.content,
+                }));
 
-            if (success && id) {
-                router.push(`/interview/${interviewId}/feedback`);
-            } else {
-                console.log("Error saving feedback");
+                const { success, feedbackId: id } = await createFeedback({
+                    interviewId,
+                    userId,
+                    transcript,
+                    feedbackId,
+                });
+
+                if (success && id) {
+                    router.push(`/interview/${interviewId}/feedback`);
+                } else {
+                    toast.error("Failed to generate feedback.");
+                    router.push("/");
+                }
+            } catch (error) {
+                console.error("Error generating feedback:", error);
+                toast.error("Something went wrong.");
                 router.push("/");
             }
         };
 
-        if (callStatus === CallStatus.FINISHED) {
-            if (type === "generate") {
-                router.push("/");
-            } else {
-                handleGenerateFeedback(messages);
+        handleFinish();
+    }, [state, messages, interviewId, userId, feedbackId, router]);
+
+    // Send user message to Gemini and get AI response
+    const getAIResponse = useCallback(
+        async (updatedMessages: ChatMessage[]) => {
+            if (isProcessingRef.current) return;
+            isProcessingRef.current = true;
+            setState(InterviewState.PROCESSING);
+
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => {
+                controller.abort();
+            }, 45000);
+
+            try {
+                const response = await fetch("/api/interview/chat", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    signal: controller.signal,
+                    body: JSON.stringify({
+                        messages: updatedMessages.map((m) => ({
+                            role: m.role,
+                            content: m.content,
+                        })),
+                        context: {
+                            role: role || "Software Engineer",
+                            level: level || "Mid-Level",
+                            techstack: techstack || [],
+                            questions,
+                        },
+                    }),
+                });
+
+                if (!response.ok) {
+                    const errData = await response.json().catch(() => ({}));
+                    throw new Error(errData.error || `HTTP ${response.status}: Failed to get AI response`);
+                }
+
+                // Read the streamed response
+                const reader = response.body?.getReader();
+                if (!reader) throw new Error("No response body");
+
+                const decoder = new TextDecoder();
+                let fullResponse = "";
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    const chunk = decoder.decode(value, { stream: true });
+
+                    // Handle both Vercel AI SDK Data Stream ("0:...") and raw text streams
+                    if (chunk.includes("\n0:") || chunk.startsWith("0:")) {
+                        const lines = chunk.split("\n");
+                        for (const line of lines) {
+                            if (line.startsWith("0:")) {
+                                try {
+                                    const text = JSON.parse(line.slice(2));
+                                    fullResponse += text;
+                                } catch {
+                                    // Skip unparseable lines
+                                }
+                            }
+                        }
+                    } else {
+                        fullResponse += chunk;
+                    }
+                }
+
+                // Timeout is only cleared after full stream read succeeds
+                clearTimeout(timeoutId);
+
+                if (!fullResponse.trim()) {
+                    throw new Error("Received empty response from AI model.");
+                }
+
+                const aiMessage: ChatMessage = {
+                    role: "assistant",
+                    content: fullResponse.trim(),
+                };
+
+                const nextMessages = [...updatedMessages, aiMessage];
+                messagesRef.current = nextMessages;
+                setMessages(nextMessages);
+
+                // Check if the interview is concluding
+                const isEnding =
+                    fullResponse.toLowerCase().includes("concludes our interview") ||
+                    fullResponse.toLowerCase().includes("thank you for your time") ||
+                    fullResponse.toLowerCase().includes("end of the interview");
+
+                // Speak the response
+                setState(InterviewState.SPEAKING);
+                isProcessingRef.current = false;
+
+                speak(fullResponse.trim(), () => {
+                    if (isEnding) {
+                        setState(InterviewState.FINISHED);
+                    } else {
+                        // Start listening for user's next response
+                        startUserListening();
+                    }
+                });
+            } catch (error: unknown) {
+                clearTimeout(timeoutId);
+                isProcessingRef.current = false;
+                const err = error as { message?: string; name?: string };
+                console.error("Error getting AI response:", error);
+                if (err?.name === "AbortError") {
+                    toast.error("AI response timed out. Please speak your response again.");
+                } else {
+                    toast.error(err?.message || "Failed to get AI response. Please try again.");
+                }
+                setState(InterviewState.LISTENING);
+                startUserListening();
             }
-        }
-    }, [messages, callStatus, feedbackId, interviewId, router, type, userId]);
+        },
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [questions, role, level, techstack]
+    );
 
-    const handleCall = async () => {
-        setCallStatus(CallStatus.CONNECTING);
+    // Submit user message and trigger AI response safely
+    const submitUserMessage = useCallback(
+        (explicitText?: string) => {
+            if (isProcessingRef.current) return;
 
-        if (type === "generate") {
-            await vapi.start(process.env.NEXT_PUBLIC_VAPI_WORKFLOW_ID!, {
-                variableValues: {
-                    username: userName,
-                    userid: userId,
-                },
-            });
-        } else {
-            let formattedQuestions = "";
-            if (questions) {
-                formattedQuestions = questions
-                    .map((question) => `- ${question}`)
-                    .join("\n");
+            if (silenceTimerRef.current) {
+                clearTimeout(silenceTimerRef.current);
+                silenceTimerRef.current = null;
             }
 
-            await vapi.start(interviewer, {
-                variableValues: {
-                    questions: formattedQuestions,
-                },
-            });
+            const messageText = (explicitText || lastTranscriptRef.current).trim();
+            if (!messageText) return;
+
+            stopListening();
+            setCurrentTranscript("");
+            lastTranscriptRef.current = "";
+
+            const userMessage: ChatMessage = {
+                role: "user",
+                content: messageText,
+            };
+
+            const updated = [...messagesRef.current, userMessage];
+            messagesRef.current = updated;
+            setMessages(updated);
+
+            getAIResponse(updated);
+        },
+        [getAIResponse]
+    );
+
+    // Start listening for user speech
+    const startUserListening = useCallback(() => {
+        if (isProcessingRef.current) return;
+
+        setState(InterviewState.LISTENING);
+        setCurrentTranscript("");
+        lastTranscriptRef.current = "";
+
+        if (silenceTimerRef.current) {
+            clearTimeout(silenceTimerRef.current);
+            silenceTimerRef.current = null;
         }
+
+        startListening({
+            onResult: (transcript, isFinal) => {
+                if (isProcessingRef.current) return;
+
+                if (isFinal) {
+                    lastTranscriptRef.current += " " + transcript;
+                    const combined = lastTranscriptRef.current.trim();
+                    setCurrentTranscript(combined);
+
+                    // Reset silence timer on each final result
+                    if (silenceTimerRef.current) {
+                        clearTimeout(silenceTimerRef.current);
+                    }
+
+                    // After 2.5 seconds of silence, automatically send the message
+                    silenceTimerRef.current = setTimeout(() => {
+                        submitUserMessage();
+                    }, 2500);
+                } else {
+                    setCurrentTranscript(
+                        (lastTranscriptRef.current + " " + transcript).trim()
+                    );
+                }
+            },
+            onEnd: () => {
+                // Speech recognition ended
+            },
+            onError: (error) => {
+                console.error("Speech recognition error:", error);
+                toast.error(error);
+            },
+        });
+    }, [submitUserMessage]);
+
+    // Start the interview
+    const handleStart = () => {
+        if (!isSupported) {
+            toast.error(
+                "Your browser does not support speech recognition. Please use Chrome, Edge, or Safari."
+            );
+            return;
+        }
+
+        setState(InterviewState.GREETING);
+
+        // Construct the first message with the first question
+        const firstQuestion = questions?.[0] || "";
+        const greeting = `${INTERVIEW_GREETING} ${firstQuestion}`;
+
+        const greetingMessage: ChatMessage = {
+            role: "assistant",
+            content: greeting,
+        };
+        messagesRef.current = [greetingMessage];
+        setMessages([greetingMessage]);
+
+        // Speak the greeting
+        setState(InterviewState.SPEAKING);
+        speak(greeting, () => {
+            startUserListening();
+        });
     };
 
-    const handleDisconnect = () => {
-        setCallStatus(CallStatus.FINISHED);
-        vapi.stop();
+    // End the interview manually
+    const handleEnd = () => {
+        stopListening();
+        cancelSpeech();
+
+        if (silenceTimerRef.current) {
+            clearTimeout(silenceTimerRef.current);
+            silenceTimerRef.current = null;
+        }
+
+        isProcessingRef.current = false;
+        setState(InterviewState.FINISHED);
+    };
+
+    // Get status text
+    const getStatusText = () => {
+        switch (state) {
+            case InterviewState.IDLE:
+                return "Click to start the interview";
+            case InterviewState.GREETING:
+            case InterviewState.SPEAKING:
+                return "AI Interviewer is speaking...";
+            case InterviewState.LISTENING:
+                return "Listening to your response...";
+            case InterviewState.PROCESSING:
+                return "Thinking...";
+            case InterviewState.FINISHED:
+                return "Generating feedback...";
+            default:
+                return "";
+        }
     };
 
     return (
         <>
+            {/* Pre-Exam Voice Guidelines Notice */}
+            <div className="w-full mb-6 p-4 rounded-2xl bg-yellow-500/10 border border-yellow-500/30 flex items-start gap-3.5 shadow-lg shadow-yellow-500/5">
+                <div className="w-9 h-9 rounded-xl bg-yellow-500/20 border border-yellow-500/30 flex items-center justify-center text-yellow-400 shrink-0 mt-0.5">
+                    <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        className="w-5 h-5"
+                    >
+                        <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+                        <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                        <line x1="12" x2="12" y1="19" y2="22" />
+                    </svg>
+                </div>
+                <div className="flex flex-col gap-1">
+                    <h4 className="text-sm font-bold text-yellow-300 tracking-wide uppercase flex items-center gap-2">
+                        Pre-Interview Voice Notice
+                    </h4>
+                    <p className="text-xs sm:text-sm text-yellow-200/90 leading-relaxed">
+                        This is an AI-based voice interview. Please <strong>speak loud and clear</strong> when answering each question. Ensure your microphone permissions are granted and ambient noise is minimized for the most accurate transcription and scoring.
+                    </p>
+                </div>
+            </div>
+
             <div className="call-view">
                 {/* AI Interviewer Card */}
                 <div className="card-interviewer">
                     <div className="avatar">
                         <Image
                             src="/ai-avatar.png"
-                            alt="profile-image"
+                            alt="AI Interviewer"
                             width={65}
                             height={54}
                             className="object-cover"
                         />
-                        {isSpeaking && <span className="animate-speak" />}
+                        {(state === InterviewState.SPEAKING ||
+                            state === InterviewState.GREETING) && (
+                            <span className="animate-speak" />
+                        )}
                     </div>
                     <h3>AI Interviewer</h3>
                 </div>
@@ -168,7 +435,7 @@ const Agent = ({
                     <div className="card-content">
                         <Image
                             src="/user-avatar.png"
-                            alt="profile-image"
+                            alt="User"
                             width={539}
                             height={539}
                             className="rounded-full object-cover size-[120px]"
@@ -178,44 +445,174 @@ const Agent = ({
                 </div>
             </div>
 
+            {/* Status Indicator */}
+            <div className="flex justify-center mt-4">
+                <div
+                    className={cn(
+                        "flex items-center gap-2 px-4 py-2 rounded-full text-sm",
+                        state === InterviewState.LISTENING &&
+                            "bg-green-500/10 text-green-400 border border-green-500/20",
+                        state === InterviewState.SPEAKING &&
+                            "bg-blue-500/10 text-blue-400 border border-blue-500/20",
+                        state === InterviewState.PROCESSING &&
+                            "bg-yellow-500/10 text-yellow-400 border border-yellow-500/20",
+                        state === InterviewState.FINISHED &&
+                            "bg-purple-500/10 text-purple-400 border border-purple-500/20",
+                        state === InterviewState.IDLE && "bg-dark-200 text-light-100/70 border border-white/5"
+                    )}
+                >
+                    {state === InterviewState.LISTENING && (
+                        <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
+                    )}
+                    {state === InterviewState.PROCESSING && (
+                        <span className="w-4 h-4 border-2 border-yellow-400 border-t-transparent rounded-full animate-spin" />
+                    )}
+                    {state === InterviewState.SPEAKING && (
+                        <span className="w-2 h-2 bg-blue-400 rounded-full animate-pulse" />
+                    )}
+                    {getStatusText()}
+                </div>
+            </div>
+
+            {/* WhatsApp-Style Horizontal Conversation Stream */}
             {messages.length > 0 && (
-                <div className="transcript-border">
-                    <div className="transcript">
-                        <p
-                            key={lastMessage}
-                            className={cn(
-                                "transition-opacity duration-500 opacity-0",
-                                "animate-fadeIn opacity-100"
-                            )}
-                        >
-                            {lastMessage}
-                        </p>
+                <div className="w-full mt-6 rounded-3xl bg-dark-200/50 border border-white/10 p-4 sm:p-6 shadow-2xl backdrop-blur-md">
+                    <div className="flex items-center justify-between pb-3 mb-4 border-b border-white/10 text-xs text-light-100/60 font-medium">
+                        <span className="flex items-center gap-2">
+                            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                            Live Dialogue Transcript
+                        </span>
+                        <span>Two-Way Conversation</span>
+                    </div>
+
+                    <div
+                        ref={transcriptRef}
+                        className="flex flex-col gap-4 max-h-[380px] overflow-y-auto pr-2 scroll-smooth"
+                    >
+                        {messages.map((msg, index) => {
+                            const isAi = msg.role === "assistant";
+                            return (
+                                <div
+                                    key={index}
+                                    className={cn(
+                                        "flex items-start gap-3 w-full",
+                                        isAi ? "justify-start" : "justify-end flex-row-reverse"
+                                    )}
+                                >
+                                    {/* Avatar */}
+                                    <div
+                                        className={cn(
+                                            "w-9 h-9 rounded-full flex items-center justify-center shrink-0 border text-xs font-bold overflow-hidden shadow-md",
+                                            isAi
+                                                ? "bg-dark-300 border-blue-400/30 text-blue-300"
+                                                : "bg-primary-200/20 border-primary-200/40 text-primary-100"
+                                        )}
+                                    >
+                                        {isAi ? (
+                                            <Image
+                                                src="/ai-avatar.png"
+                                                alt="AI Interviewer"
+                                                width={36}
+                                                height={36}
+                                                className="object-cover"
+                                            />
+                                        ) : (
+                                            <span>{userName ? userName.charAt(0).toUpperCase() : "U"}</span>
+                                        )}
+                                    </div>
+
+                                    {/* Speech Bubble */}
+                                    <div
+                                        className={cn(
+                                            "max-w-[82%] sm:max-w-[70%] p-4 rounded-2xl shadow-lg text-sm leading-relaxed transition-all",
+                                            isAi
+                                                ? "bg-dark-300/90 border border-white/10 text-light-100 rounded-tl-sm"
+                                                : "bg-primary-200/15 border border-primary-200/30 text-primary-100 rounded-tr-sm"
+                                        )}
+                                    >
+                                        <div className="flex items-center justify-between gap-4 mb-1.5 pb-1 border-b border-white/5">
+                                            <span
+                                                className={cn(
+                                                    "text-[11px] font-bold uppercase tracking-wider",
+                                                    isAi ? "text-blue-300" : "text-primary-100"
+                                                )}
+                                            >
+                                                {isAi ? "AI Interviewer" : "You (Candidate)"}
+                                            </span>
+                                            <span className="text-[10px] text-light-100/40">
+                                                {isAi ? "Question / Response" : "Answer"}
+                                            </span>
+                                        </div>
+
+                                        <p className="whitespace-pre-wrap">{msg.content}</p>
+                                    </div>
+                                </div>
+                            );
+                        })}
+
+                        {/* Interim Real-time Transcript While User is Speaking */}
+                        {currentTranscript && state === InterviewState.LISTENING && (
+                            <div className="flex items-start gap-3 w-full justify-end flex-row-reverse animate-fade-in">
+                                <div className="w-9 h-9 rounded-full bg-green-500/20 border border-green-500/40 flex items-center justify-center text-green-300 text-xs font-bold shrink-0">
+                                    <span className="w-2 h-2 bg-green-400 rounded-full animate-ping" />
+                                </div>
+
+                                <div className="max-w-[82%] sm:max-w-[70%] p-4 rounded-2xl bg-green-500/10 border border-green-500/30 text-green-200 rounded-tr-sm shadow-md">
+                                    <div className="flex items-center justify-between gap-4 mb-1.5 pb-1 border-b border-green-500/20">
+                                        <span className="text-[11px] font-bold uppercase tracking-wider text-green-400 flex items-center gap-1.5">
+                                            <span className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse" />
+                                            Listening to you...
+                                        </span>
+                                        <span className="text-[10px] text-green-300/60">Live</span>
+                                    </div>
+                                    <p className="italic text-sm">{currentTranscript}</p>
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
             )}
 
-            <div className="w-full flex justify-center">
-                {callStatus !== "ACTIVE" ? (
-                    <button className="relative btn-call" onClick={() => handleCall()}>
-            <span
-                className={cn(
-                    "absolute animate-ping rounded-full opacity-75",
-                    callStatus !== "CONNECTING" && "hidden"
-                )}
-            />
-
-                        <span className="relative">
-              {callStatus === "INACTIVE" || callStatus === "FINISHED"
-                  ? "Call"
-                  : ". . ."}
-            </span>
+            {/* Controls */}
+            <div className="w-full flex justify-center items-center gap-4 mt-6">
+                {state === InterviewState.IDLE ? (
+                    <button className="relative btn-call" onClick={handleStart}>
+                        <span className="relative">Start Interview</span>
                     </button>
+                ) : state === InterviewState.FINISHED ? (
+                    <div className="flex items-center gap-2 text-light-100/60">
+                        <span className="w-4 h-4 border-2 border-light-100/60 border-t-transparent rounded-full animate-spin" />
+                        Generating your feedback...
+                    </div>
                 ) : (
-                    <button className="btn-disconnect" onClick={() => handleDisconnect()}>
-                        End
-                    </button>
+                    <>
+                        {state === InterviewState.LISTENING && (
+                            <button
+                                className="px-5 py-2.5 rounded-full bg-primary-200/20 hover:bg-primary-200/30 text-primary-100 font-medium text-sm transition-all border border-primary-200/30 flex items-center gap-2"
+                                onClick={() => submitUserMessage()}
+                                title="Click when you are finished speaking"
+                            >
+                                <span className="w-2 h-2 rounded-full bg-green-400" />
+                                Done Speaking
+                            </button>
+                        )}
+                        <button className="btn-disconnect" onClick={handleEnd}>
+                            End Interview
+                        </button>
+                    </>
                 )}
             </div>
+
+            {/* Browser support warning */}
+            {!isSupported && (
+                <div className="mt-4 p-4 bg-red-500/10 border border-red-500/20 rounded-lg text-center">
+                    <p className="text-red-400 text-sm">
+                        Your browser does not support the Web Speech API.
+                        Please use <strong>Google Chrome</strong>, <strong>Microsoft Edge</strong>,
+                        or <strong>Safari</strong> for the best experience.
+                    </p>
+                </div>
+            )}
         </>
     );
 };

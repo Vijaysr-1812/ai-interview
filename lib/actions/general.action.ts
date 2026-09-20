@@ -1,7 +1,6 @@
 "use server";
 
-import { generateObject } from "ai";
-import { google } from "@ai-sdk/google";
+import { generateStructuredData } from "@/lib/ai";
 
 import { db } from "@/firebase/admin";
 import { feedbackSchema } from "@/constants";
@@ -17,35 +16,68 @@ export async function createFeedback(params: CreateFeedbackParams) {
             )
             .join("");
 
-        const { object } = await generateObject({
-            model: google("gemini-2.0-flash-001", {
-                structuredOutputs: false,
-            }),
+        // Fetch interview context for role-aware evaluation
+        const interviewDoc = await db.collection("interviews").doc(interviewId).get();
+        const interviewData = interviewDoc.exists ? interviewDoc.data() : null;
+        const roleContext = interviewData
+            ? `The candidate is interviewing for a ${interviewData.level || ""} ${interviewData.role || "general"} role with tech stack: ${(interviewData.techstack || []).join(", ")}.`
+            : "General interview evaluation.";
+
+        const { object } = await generateStructuredData({
             schema: feedbackSchema,
             prompt: `
-        You are an AI interviewer analyzing a mock interview. Your task is to evaluate the candidate based on structured categories. Be thorough and detailed in your analysis. Don't be lenient with the candidate. If there are mistakes or areas for improvement, point them out.
+        You are a senior AI interviewer analyzing a mock interview. Your task is to provide a comprehensive, detailed evaluation. Be thorough and constructive. Don't be lenient — if there are mistakes or areas for improvement, point them out clearly with actionable advice.
+        
+        ${roleContext}
+        
         Transcript:
         ${formattedTranscript}
 
-        Please score the candidate from 0 to 100 in the following areas. Do not add categories other than the ones provided:
-        - **Communication Skills**: Clarity, articulation, structured responses.
-        - **Technical Knowledge**: Understanding of key concepts for the role.
-        - **Problem-Solving**: Ability to analyze problems and propose solutions.
-        - **Cultural & Role Fit**: Alignment with company values and job role.
-        - **Confidence & Clarity**: Confidence in responses, engagement, and clarity.
+        Provide a comprehensive evaluation including:
+
+        1. **Total Score** (0-100) and **Performance Band** (Excellent: 85-100, Good: 70-84, Average: 55-69, Below Average: 40-54, Needs Improvement: 0-39).
+
+        2. **Category Scores** — Score each of these 5 categories from 0-100 with a detailed comment AND 2-3 sub-metrics per category:
+           - **Communication Skills**: Sub-metrics: Clarity of Expression, Structured Responses, Active Listening
+           - **Technical Knowledge**: Sub-metrics: Core Concepts, Practical Application, Depth of Understanding
+           - **Problem Solving**: Sub-metrics: Analytical Thinking, Solution Quality, Edge Case Awareness
+           - **Cultural & Role Fit**: Sub-metrics: Motivation, Team Collaboration, Role Alignment
+           - **Confidence & Clarity**: Sub-metrics: Composure, Engagement, Conviction
+
+        3. **Strengths** — List 2-4 specific strengths with concrete examples/quotes from the transcript.
+
+        4. **Areas for Improvement** — List 2-4 areas with:
+           - Actionable suggestion for each
+           - Resource type: "practice" (needs hands-on practice), "study" (needs to learn/read), or "behavior" (soft skill to develop)
+           - Priority: "high", "medium", or "low"
+
+        5. **Detailed Suggestions**:
+           - Immediate actions (things to fix right now, 2-3 items)
+           - Short-term goals (1-2 week improvements, 2-3 items)
+           - Long-term development areas (ongoing growth, 2-3 items)
+
+        6. **Sample Ideal Answers** — Pick up to 3 questions where the candidate's answer could be significantly improved. For each, provide the question asked, what the candidate said, what an ideal answer would be, and the gap between them.
+
+        7. **Final Assessment** — A 2-3 sentence overall summary.
+
+        8. **Hiring Recommendation** — "Strong Hire", "Hire", "Maybe", or "No Hire" based on overall performance.
         `,
             system:
-                "You are a professional interviewer analyzing a mock interview. Your task is to evaluate the candidate based on structured categories",
+                "You are a senior professional interviewer providing detailed, actionable feedback on mock interview performance. Be constructive but honest.",
         });
 
         const feedback = {
             interviewId: interviewId,
             userId: userId,
             totalScore: object.totalScore,
+            performanceBand: object.performanceBand,
             categoryScores: object.categoryScores,
             strengths: object.strengths,
             areasForImprovement: object.areasForImprovement,
+            detailedSuggestions: object.detailedSuggestions,
+            sampleIdealAnswers: object.sampleIdealAnswers,
             finalAssessment: object.finalAssessment,
+            hiringRecommendation: object.hiringRecommendation,
             createdAt: new Date().toISOString(),
         };
 
@@ -69,7 +101,9 @@ export async function createFeedback(params: CreateFeedbackParams) {
 export async function getInterviewById(id: string): Promise<Interview | null> {
     const interview = await db.collection("interviews").doc(id).get();
 
-    return interview.data() as Interview | null;
+    if (!interview.exists) return null;
+
+    return { id: interview.id, ...interview.data() } as Interview;
 }
 
 export async function getFeedbackByInterviewId(
@@ -95,31 +129,69 @@ export async function getLatestInterviews(
 ): Promise<Interview[] | null> {
     const { userId, limit = 20 } = params;
 
-    const interviews = await db
-        .collection("interviews")
-        .orderBy("createdAt", "desc")
-        .where("finalized", "==", true)
-        .where("userId", "!=", userId)
-        .limit(limit)
-        .get();
+    try {
+        const interviews = await db
+            .collection("interviews")
+            .orderBy("createdAt", "desc")
+            .where("finalized", "==", true)
+            .where("userId", "!=", userId)
+            .limit(limit)
+            .get();
 
-    return interviews.docs.map((doc) => ({
-        id: doc.id,
-        ...doc.data(),
-    })) as Interview[];
+        return interviews.docs.map((doc) => ({
+            id: doc.id,
+            ...doc.data(),
+        })) as Interview[];
+    } catch (err: unknown) {
+        const error = err as { code?: number };
+        if (error?.code === 9) {
+            // Fallback for missing composite index: fetch finalized interviews and filter in memory
+            const interviews = await db.collection("interviews").get();
+            const docs = interviews.docs
+                .map((doc) => ({ id: doc.id, ...doc.data() } as Interview))
+                .filter((item) => item.finalized && item.userId !== userId)
+                .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
+                .slice(0, limit);
+            return docs;
+        }
+        throw err;
+    }
 }
 
 export async function getInterviewsByUserId(
     userId: string
 ): Promise<Interview[] | null> {
-    const interviews = await db
-        .collection("interviews")
-        .where("userId", "==", userId)
-        .orderBy("createdAt", "desc")
-        .get();
+    try {
+        const interviews = await db
+            .collection("interviews")
+            .where("userId", "==", userId)
+            .orderBy("createdAt", "desc")
+            .get();
 
-    return interviews.docs.map((doc) => ({
-        id: doc.id,
-        ...doc.data(),
-    })) as Interview[];
+        return interviews.docs.map((doc) => ({
+            id: doc.id,
+            ...doc.data(),
+        })) as Interview[];
+    } catch (err: unknown) {
+        const error = err as { code?: number };
+        if (error?.code === 9) {
+            // Fallback for missing composite index: fetch by userId and sort in memory
+            const interviews = await db
+                .collection("interviews")
+                .where("userId", "==", userId)
+                .get();
+
+            const docs = interviews.docs.map((doc) => ({
+                id: doc.id,
+                ...doc.data(),
+            })) as Interview[];
+
+            return docs.sort(
+                (a, b) =>
+                    new Date(b.createdAt || 0).getTime() -
+                    new Date(a.createdAt || 0).getTime()
+            );
+        }
+        throw err;
+    }
 }
