@@ -14,9 +14,9 @@ function getFirebaseAdmin() {
         ) {
             try {
                 const rawKey = process.env.FIREBASE_PRIVATE_KEY;
-                const formattedKey = rawKey.includes("\\n")
-                    ? rawKey.replace(/\\n/g, "\n")
-                    : rawKey;
+                const formattedKey = rawKey
+                    .replace(/\\\+/g, "+")
+                    .replace(/\\n/g, "\n");
 
                 initializeApp({
                     credential: cert({
