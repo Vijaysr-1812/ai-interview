@@ -36,6 +36,9 @@ let isListening = false;
 let shouldRestart = false;
 let activeCallbacks: ListenCallbacks | null = null;
 
+let networkRetryCount = 0;
+const MAX_NETWORK_RETRIES = 1;
+
 export function startListening(callbacks: ListenCallbacks): boolean {
     if (!isSpeechRecognitionSupported()) {
         callbacks.onError(
@@ -58,6 +61,7 @@ export function startListening(callbacks: ListenCallbacks): boolean {
 
     shouldRestart = true;
     isListening = true;
+    networkRetryCount = 0;
     activeCallbacks = callbacks;
 
     recognition.onresult = (event: any) => {
@@ -93,8 +97,47 @@ export function startListening(callbacks: ListenCallbacks): boolean {
         if (event.error === "aborted") {
             return;
         }
-        console.error("Speech recognition error:", event.error);
-        activeCallbacks.onError(`Speech recognition error: ${event.error}`);
+
+        console.warn("Speech recognition error:", event.error);
+
+        // Network error handling with single backoff retry to prevent infinite crash loops
+        if (event.error === "network") {
+            if (networkRetryCount < MAX_NETWORK_RETRIES && shouldRestart) {
+                networkRetryCount++;
+                console.log("[Speech] Retrying speech recognition after network blip...");
+                setTimeout(() => {
+                    if (shouldRestart) {
+                        try {
+                            recognition?.start();
+                        } catch {
+                            // Ignored
+                        }
+                    }
+                }, 1200);
+                return;
+            }
+
+            // Exhausted retries — halt cleanly and inform user
+            shouldRestart = false;
+            isListening = false;
+            activeCallbacks.onError(
+                "Speech recognition network error: unable to reach speech services (often caused by ad-blockers, Brave Shields, or network restrictions). You can type your answer below."
+            );
+            return;
+        }
+
+        // Permission errors
+        if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+            shouldRestart = false;
+            isListening = false;
+            activeCallbacks.onError(
+                "Microphone or speech service permission was denied. Please allow microphone access or type your answer below."
+            );
+            return;
+        }
+
+        // Other non-fatal errors
+        activeCallbacks.onError(`Speech recognition notice: ${event.error}`);
     };
 
     recognition.onend = () => {
@@ -125,7 +168,7 @@ export function startListening(callbacks: ListenCallbacks): boolean {
         console.error("Failed to start speech recognition:", error);
         isListening = false;
         activeCallbacks = null;
-        callbacks.onError("Failed to start speech recognition. Please check microphone permissions.");
+        callbacks.onError("Failed to start speech recognition. Please check microphone permissions or type your answer.");
         return false;
     }
 }

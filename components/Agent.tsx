@@ -45,6 +45,8 @@ const Agent = ({
     const [state, setState] = useState<InterviewState>(InterviewState.IDLE);
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [currentTranscript, setCurrentTranscript] = useState("");
+    const [typedMessage, setTypedMessage] = useState("");
+    const [speechNotice, setSpeechNotice] = useState<string | null>(null);
     const [isSupported, setIsSupported] = useState(true);
     const transcriptRef = useRef<HTMLDivElement>(null);
     const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -257,6 +259,8 @@ const Agent = ({
             stopListening();
             setCurrentTranscript("");
             lastTranscriptRef.current = "";
+            setTypedMessage("");
+            setSpeechNotice(null);
 
             const userMessage: ChatMessage = {
                 role: "user",
@@ -288,6 +292,7 @@ const Agent = ({
         startListening({
             onResult: (transcript, isFinal) => {
                 if (isProcessingRef.current) return;
+                setSpeechNotice(null);
 
                 if (isFinal) {
                     lastTranscriptRef.current += " " + transcript;
@@ -313,8 +318,8 @@ const Agent = ({
                 // Speech recognition ended
             },
             onError: (error) => {
-                console.error("Speech recognition error:", error);
-                toast.error(error);
+                console.warn("Speech recognition notice:", error);
+                setSpeechNotice(error);
             },
         });
     }, [submitUserMessage]);
@@ -571,6 +576,50 @@ const Agent = ({
                         )}
                     </div>
                 </div>
+            )}
+
+            {/* Speech Notice Banner */}
+            {speechNotice && state === InterviewState.LISTENING && (
+                <div className="w-full max-w-3xl mx-auto mt-3 p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl text-xs text-amber-200 flex items-center justify-between gap-3 animate-fade-in">
+                    <span className="flex items-center gap-2">
+                        <span>⚠️</span>
+                        <span>{speechNotice}</span>
+                    </span>
+                    <button
+                        type="button"
+                        onClick={() => setSpeechNotice(null)}
+                        className="text-amber-400 hover:text-amber-300 font-bold px-2 py-0.5"
+                    >
+                        ✕
+                    </button>
+                </div>
+            )}
+
+            {/* Hybrid Input: Microphone or Direct Text Input */}
+            {state === InterviewState.LISTENING && (
+                <form
+                    onSubmit={(e) => {
+                        e.preventDefault();
+                        if (!typedMessage.trim()) return;
+                        submitUserMessage(typedMessage.trim());
+                    }}
+                    className="w-full max-w-3xl mx-auto flex items-center gap-2 mt-4 px-2"
+                >
+                    <input
+                        type="text"
+                        value={typedMessage}
+                        onChange={(e) => setTypedMessage(e.target.value)}
+                        placeholder="Speak into your mic, or type your answer here and press Enter..."
+                        className="flex-1 px-4 py-3 rounded-xl bg-dark-300/80 border border-white/10 text-light-100 placeholder:text-light-100/40 text-sm focus:outline-none focus:border-primary-200/50 shadow-inner"
+                    />
+                    <button
+                        type="submit"
+                        disabled={!typedMessage.trim()}
+                        className="px-5 py-3 rounded-xl bg-primary-200 text-white font-semibold text-sm transition-all hover:bg-primary-200/90 disabled:opacity-40 disabled:cursor-not-allowed shadow-md shrink-0"
+                    >
+                        Submit
+                    </button>
+                </form>
             )}
 
             {/* Controls */}
