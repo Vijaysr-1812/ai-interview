@@ -106,10 +106,11 @@ export async function POST(request: Request) {
         });
 
         return result.toTextStreamResponse();
-    } catch (error: any) {
+    } catch (error: unknown) {
         console.error("Error in interview chat:", error);
+        const err = error as { message?: string };
         return Response.json(
-            { error: error?.message || "Internal server error" },
+            { error: err?.message || "Internal server error" },
             { status: 500 }
         );
     }
