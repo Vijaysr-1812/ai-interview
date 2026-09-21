@@ -27,7 +27,8 @@ interface StreamInterviewChatOptions {
 
 /**
  * Stream interview chat with automatic multi-provider resilience.
- * Seamlessly switches between Google Gemini and Groq.
+ * Seamlessly prioritizes Groq for low latency and high availability,
+ * with fallback to Google Gemini.
  */
 export async function streamInterviewChat({
     messages,
@@ -35,33 +36,57 @@ export async function streamInterviewChat({
 }: StreamInterviewChatOptions) {
     const groq = getGroqClient();
     const hasGoogle = !!process.env.GOOGLE_GENERATIVE_AI_API_KEY;
-    const preferredProvider = process.env.PREFERRED_AI_PROVIDER || "auto";
+    const preferredProvider = process.env.PREFERRED_AI_PROVIDER || "groq";
 
     if (!hasGoogle && !groq) {
         throw new Error(
-            "No AI API keys configured. Please set GOOGLE_GENERATIVE_AI_API_KEY or GROQ_API_KEY in your environment variables."
+            "No AI API keys configured. Please set GROQ_API_KEY or GOOGLE_GENERATIVE_AI_API_KEY in your environment variables."
         );
     }
 
-    const preferGroq = preferredProvider === "groq" || (groq !== null && !hasGoogle);
+    const useGroq = preferredProvider === "groq" ? !!groq : (!hasGoogle && !!groq);
 
-    if (preferGroq && groq) {
-        console.log(`[AI Engine] Streaming with Groq (${GROQ_CHAT_MODEL})`);
-        return streamText({
-            model: groq(GROQ_CHAT_MODEL),
-            system: systemPrompt,
-            messages,
-        });
+    if (useGroq && groq) {
+        try {
+            console.log(`[AI Engine] Streaming interview with Groq (${GROQ_CHAT_MODEL})`);
+            return streamText({
+                model: groq(GROQ_CHAT_MODEL),
+                system: systemPrompt,
+                messages,
+            });
+        } catch (groqError) {
+            console.warn("[AI Engine] Groq streaming error. Falling back to Google Gemini:", groqError);
+            if (hasGoogle) {
+                return streamText({
+                    model: google(GEMINI_CHAT_MODEL),
+                    system: systemPrompt,
+                    messages,
+                });
+            }
+            throw groqError;
+        }
     }
 
-    // Default to Google Gemini (or Groq if Gemini is not available)
+    // Default to Google Gemini only if Groq is not configured or user explicitly requested Google
     if (hasGoogle) {
-        console.log(`[AI Engine] Streaming with Google Gemini (${GEMINI_CHAT_MODEL})`);
-        return streamText({
-            model: google(GEMINI_CHAT_MODEL),
-            system: systemPrompt,
-            messages,
-        });
+        try {
+            console.log(`[AI Engine] Streaming interview with Google Gemini (${GEMINI_CHAT_MODEL})`);
+            return streamText({
+                model: google(GEMINI_CHAT_MODEL),
+                system: systemPrompt,
+                messages,
+            });
+        } catch (geminiError) {
+            console.warn("[AI Engine] Gemini streaming error. Falling back to Groq:", geminiError);
+            if (groq) {
+                return streamText({
+                    model: groq(GROQ_CHAT_MODEL),
+                    system: systemPrompt,
+                    messages,
+                });
+            }
+            throw geminiError;
+        }
     }
 
     return streamText({
@@ -84,12 +109,12 @@ export async function generateStructuredData<T = any>({
 }) {
     const groq = getGroqClient();
     const hasGoogle = !!process.env.GOOGLE_GENERATIVE_AI_API_KEY;
-    const preferredProvider = process.env.PREFERRED_AI_PROVIDER || "auto";
-    const preferGroq = preferredProvider === "groq" || (groq !== null && !hasGoogle);
+    const preferredProvider = process.env.PREFERRED_AI_PROVIDER || "groq";
+    const preferGroq = preferredProvider === "groq" || (groq !== null && preferredProvider !== "google");
 
     if (preferGroq && groq) {
         try {
-            console.log(`[AI Engine] Generating object with primary provider: Groq (${GROQ_REASONING_MODEL})`);
+            console.log(`[AI Engine] Generating structured object with Groq (${GROQ_REASONING_MODEL})`);
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             return await (generateObject as any)({
                 model: groq(GROQ_REASONING_MODEL),
@@ -112,10 +137,10 @@ export async function generateStructuredData<T = any>({
         }
     }
 
-    // Default: Gemini primary -> Groq fallback
+    // Google Gemini primary with Groq fallback
     if (hasGoogle) {
         try {
-            console.log(`[AI Engine] Generating object with primary provider: Google Gemini (${GEMINI_CHAT_MODEL})`);
+            console.log(`[AI Engine] Generating structured object with Google Gemini (${GEMINI_CHAT_MODEL})`);
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             return await (generateObject as any)({
                 model: google(GEMINI_CHAT_MODEL),
