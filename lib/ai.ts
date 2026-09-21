@@ -6,14 +6,15 @@ import { z } from "zod";
 // Primary & fallback model definitions
 const GEMINI_CHAT_MODEL = "gemini-3.6-flash";
 const GROQ_CHAT_MODEL = "openai/gpt-oss-20b"; // Lightning fast for spoken voice dialogues (~700ms TTFT)
-const GROQ_REASONING_MODEL = "openai/gpt-oss-120b"; // Deep reasoning for complex questions and 5D feedback
+const GROQ_FAST_STRUCTURED_MODEL = "openai/gpt-oss-20b"; // Ultra-fast JSON generation (~2s) to stay within function timeouts
+const GROQ_DEEP_REASONING_MODEL = "openai/gpt-oss-120b"; // Secondary deep reasoning model
 
 function getGroqClient() {
     const key =
         process.env.GROQ_GENERATIVE_AI_API_KEY ||
         process.env.GROQ_API_KEY ||
         "";
-    if (!key) return null;
+    if (!key || !key.trim()) return null;
     return createGroq({ apiKey: key.trim().replace(/^["']|["']$/g, "") });
 }
 
@@ -55,8 +56,8 @@ export async function streamInterviewChat({
                 messages,
             });
         } catch (groqError) {
-            console.warn("[AI Engine] Groq streaming error. Falling back to Google Gemini:", groqError);
-            if (hasGoogle) {
+            console.warn("[AI Engine] Groq streaming error:", groqError);
+            if (hasGoogle && preferredProvider !== "groq") {
                 return streamText({
                     model: google(GEMINI_CHAT_MODEL),
                     system: systemPrompt,
@@ -114,26 +115,37 @@ export async function generateStructuredData<T = any>({
 
     if (preferGroq && groq) {
         try {
-            console.log(`[AI Engine] Generating structured object with Groq (${GROQ_REASONING_MODEL})`);
+            console.log(`[AI Engine] Generating structured object with Groq (${GROQ_FAST_STRUCTURED_MODEL})`);
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             return await (generateObject as any)({
-                model: groq(GROQ_REASONING_MODEL),
+                model: groq(GROQ_FAST_STRUCTURED_MODEL),
                 schema,
                 prompt,
                 system,
             }) as { object: T };
-        } catch (groqError) {
-            console.warn("[AI Engine] Groq generation failed. Falling back to Google Gemini:", groqError);
-            if (hasGoogle) {
+        } catch (groqFastError) {
+            console.warn("[AI Engine] Groq primary generation failed, attempting deep model fallback:", groqFastError);
+            try {
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 return await (generateObject as any)({
-                    model: google(GEMINI_CHAT_MODEL),
+                    model: groq(GROQ_DEEP_REASONING_MODEL),
                     schema,
                     prompt,
                     system,
                 }) as { object: T };
+            } catch (groqDeepError) {
+                console.warn("[AI Engine] Groq deep model also failed:", groqDeepError);
+                if (hasGoogle && preferredProvider !== "groq") {
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    return await (generateObject as any)({
+                        model: google(GEMINI_CHAT_MODEL),
+                        schema,
+                        prompt,
+                        system,
+                    }) as { object: T };
+                }
+                throw groqFastError;
             }
-            throw groqError;
         }
     }
 
@@ -150,10 +162,10 @@ export async function generateStructuredData<T = any>({
             }) as { object: T };
         } catch (geminiError) {
             if (groq) {
-                console.warn(`[AI Engine] Gemini generation failed. Falling back to Groq (${GROQ_REASONING_MODEL}):`, geminiError);
+                console.warn(`[AI Engine] Gemini generation failed. Falling back to Groq (${GROQ_FAST_STRUCTURED_MODEL}):`, geminiError);
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 return await (generateObject as any)({
-                    model: groq(GROQ_REASONING_MODEL),
+                    model: groq(GROQ_FAST_STRUCTURED_MODEL),
                     schema,
                     prompt,
                     system,
@@ -166,7 +178,7 @@ export async function generateStructuredData<T = any>({
     if (groq) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         return await (generateObject as any)({
-            model: groq(GROQ_REASONING_MODEL),
+            model: groq(GROQ_FAST_STRUCTURED_MODEL),
             schema,
             prompt,
             system,

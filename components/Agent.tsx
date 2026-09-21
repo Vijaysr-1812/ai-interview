@@ -101,22 +101,24 @@ const Agent = ({
                     content: m.content,
                 }));
 
-                const { success, feedbackId: id } = await createFeedback({
+                const result = await createFeedback({
                     interviewId,
                     userId,
                     transcript,
                     feedbackId,
                 });
 
-                if (success && id) {
+                if (result.success && result.feedbackId) {
                     router.push(`/interview/${interviewId}/feedback`);
                 } else {
-                    toast.error("Failed to generate feedback.");
+                    const errMsg = (result as { error?: string }).error || "Failed to generate feedback.";
+                    toast.error(errMsg);
                     router.push("/");
                 }
-            } catch (error) {
+            } catch (error: unknown) {
+                const err = error as { message?: string };
                 console.error("Error generating feedback:", error);
-                toast.error("Something went wrong.");
+                toast.error(err?.message || "Something went wrong generating feedback.");
                 router.push("/");
             }
         };
