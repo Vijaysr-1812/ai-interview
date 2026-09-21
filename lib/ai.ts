@@ -9,6 +9,11 @@ const GROQ_CHAT_MODEL = "openai/gpt-oss-20b"; // Lightning fast for spoken voice
 const GROQ_FAST_STRUCTURED_MODEL = "openai/gpt-oss-20b"; // Ultra-fast JSON generation (~2s) to stay within function timeouts
 const GROQ_DEEP_REASONING_MODEL = "openai/gpt-oss-120b"; // Secondary deep reasoning model
 
+function getPreferredProvider(): string {
+    const raw = process.env.PREFERRED_AI_PROVIDER || "groq";
+    return raw.trim().replace(/^["']|["']$/g, "").toLowerCase();
+}
+
 function getGroqClient() {
     const key =
         process.env.GROQ_GENERATIVE_AI_API_KEY ||
@@ -28,8 +33,7 @@ interface StreamInterviewChatOptions {
 
 /**
  * Stream interview chat with automatic multi-provider resilience.
- * Seamlessly prioritizes Groq for low latency and high availability,
- * with fallback to Google Gemini.
+ * Prioritizes Groq for sub-second voice chat, eliminating Gemini 503/429 errors.
  */
 export async function streamInterviewChat({
     messages,
@@ -37,7 +41,7 @@ export async function streamInterviewChat({
 }: StreamInterviewChatOptions) {
     const groq = getGroqClient();
     const hasGoogle = !!process.env.GOOGLE_GENERATIVE_AI_API_KEY;
-    const preferredProvider = process.env.PREFERRED_AI_PROVIDER || "groq";
+    const preferredProvider = getPreferredProvider();
 
     if (!hasGoogle && !groq) {
         throw new Error(
@@ -45,7 +49,8 @@ export async function streamInterviewChat({
         );
     }
 
-    const useGroq = preferredProvider === "groq" ? !!groq : (!hasGoogle && !!groq);
+    // Always use Groq if available unless explicitly overridden to "google"
+    const useGroq = !!groq && preferredProvider !== "google";
 
     if (useGroq && groq) {
         try {
@@ -57,7 +62,7 @@ export async function streamInterviewChat({
             });
         } catch (groqError) {
             console.warn("[AI Engine] Groq streaming error:", groqError);
-            if (hasGoogle && preferredProvider !== "groq") {
+            if (hasGoogle && preferredProvider === "google") {
                 return streamText({
                     model: google(GEMINI_CHAT_MODEL),
                     system: systemPrompt,
@@ -68,7 +73,7 @@ export async function streamInterviewChat({
         }
     }
 
-    // Default to Google Gemini only if Groq is not configured or user explicitly requested Google
+    // Default to Google Gemini ONLY if Groq is not configured or user explicitly requested "google"
     if (hasGoogle) {
         try {
             console.log(`[AI Engine] Streaming interview with Google Gemini (${GEMINI_CHAT_MODEL})`);
@@ -110,10 +115,10 @@ export async function generateStructuredData<T = any>({
 }) {
     const groq = getGroqClient();
     const hasGoogle = !!process.env.GOOGLE_GENERATIVE_AI_API_KEY;
-    const preferredProvider = process.env.PREFERRED_AI_PROVIDER || "groq";
-    const preferGroq = preferredProvider === "groq" || (groq !== null && preferredProvider !== "google");
+    const preferredProvider = getPreferredProvider();
+    const useGroq = !!groq && preferredProvider !== "google";
 
-    if (preferGroq && groq) {
+    if (useGroq && groq) {
         try {
             console.log(`[AI Engine] Generating structured object with Groq (${GROQ_FAST_STRUCTURED_MODEL})`);
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -135,7 +140,7 @@ export async function generateStructuredData<T = any>({
                 }) as { object: T };
             } catch (groqDeepError) {
                 console.warn("[AI Engine] Groq deep model also failed:", groqDeepError);
-                if (hasGoogle && preferredProvider !== "groq") {
+                if (hasGoogle && preferredProvider === "google") {
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     return await (generateObject as any)({
                         model: google(GEMINI_CHAT_MODEL),
@@ -149,7 +154,7 @@ export async function generateStructuredData<T = any>({
         }
     }
 
-    // Google Gemini primary with Groq fallback
+    // Google Gemini primary only if Groq is not configured or user explicitly requested "google"
     if (hasGoogle) {
         try {
             console.log(`[AI Engine] Generating structured object with Google Gemini (${GEMINI_CHAT_MODEL})`);
