@@ -26,13 +26,15 @@ const authFormSchema = (type: FormType) => {
     return z.object({
         name: type === "sign-up" ? z.string().min(3, "Name must be at least 3 characters") : z.string().optional(),
         email: z.string().email("Please enter a valid email address"),
-        password: z
-            .string()
-            .min(8, "Password must be at least 8 characters")
-            .regex(
-                /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/,
-                "Password must contain at least one uppercase letter, one lowercase letter, and one number"
-            ),
+        password: type === "sign-up"
+            ? z
+                .string()
+                .min(8, "Password must be at least 8 characters")
+                .regex(
+                    /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/,
+                    "Password must contain at least one uppercase letter, one lowercase letter, and one number"
+                )
+            : z.string().min(1, "Password is required"),
     });
 };
 
