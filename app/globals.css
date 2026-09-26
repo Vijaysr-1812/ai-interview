@@ -332,3 +332,16 @@
         transform: translateY(0);
     }
 }
+
+@keyframes shimmer {
+    0% {
+        transform: translateX(-100%);
+    }
+    100% {
+        transform: translateX(200%);
+    }
+}
+
+@utility animate-shimmer {
+    animation: shimmer 1.8s infinite linear;
+}

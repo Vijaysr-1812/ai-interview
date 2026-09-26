@@ -16,6 +16,8 @@ import {
     isSpeechRecognitionSupported,
     isSpeechSynthesisSupported,
 } from "@/lib/speech";
+import { ProctorCheckModal } from "@/components/ProctorCheckModal";
+import { Camera, ShieldCheck, Eye, VideoOff, Mic } from "lucide-react";
 
 enum InterviewState {
     IDLE = "IDLE",
@@ -48,6 +50,11 @@ const Agent = ({
     const [typedMessage, setTypedMessage] = useState("");
     const [speechNotice, setSpeechNotice] = useState<string | null>(null);
     const [isSupported, setIsSupported] = useState(true);
+    const [showProctorModal, setShowProctorModal] = useState(false);
+    const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
+    const [isCameraActive, setIsCameraActive] = useState(false);
+
+    const videoRef = useRef<HTMLVideoElement>(null);
     const transcriptRef = useRef<HTMLDivElement>(null);
     const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
     const lastTranscriptRef = useRef<string>("");
@@ -58,6 +65,14 @@ const Agent = ({
     useEffect(() => {
         messagesRef.current = messages;
     }, [messages]);
+
+    // Attach stream to video tag whenever cameraStream changes
+    useEffect(() => {
+        if (videoRef.current && cameraStream) {
+            videoRef.current.srcObject = cameraStream;
+            videoRef.current.play().catch((err) => console.warn("Video play error:", err));
+        }
+    }, [cameraStream]);
 
     // Auto-scroll transcript
     useEffect(() => {
@@ -81,8 +96,11 @@ const Agent = ({
             if (silenceTimerRef.current) {
                 clearTimeout(silenceTimerRef.current);
             }
+            if (cameraStream) {
+                cameraStream.getTracks().forEach((track) => track.stop());
+            }
         };
-    }, []);
+    }, [cameraStream]);
 
     // Handle interview completion
     useEffect(() => {
@@ -326,7 +344,7 @@ const Agent = ({
         });
     }, [submitUserMessage]);
 
-    // Start the interview
+    // Step 1: Open Proctor & Hardware Verification Modal
     const handleStart = () => {
         if (!isSupported) {
             toast.error(
@@ -335,6 +353,33 @@ const Agent = ({
             return;
         }
 
+        // Open the proctoring verification window first
+        setShowProctorModal(true);
+    };
+
+    // Step 2: Confirmed proctored check - start webcam stream and begin assessment
+    const handleConfirmProctorCheck = async () => {
+        setShowProctorModal(false);
+
+        // Acquire persistent webcam stream for Candidate card during the interview
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" },
+                audio: false, // Audio will be handled by speech recognition engine
+            });
+            setCameraStream(stream);
+            setIsCameraActive(true);
+            toast.success("Proctoring session active: Camera and Microphone verified.");
+        } catch (camErr) {
+            console.warn("Could not start live proctoring camera view:", camErr);
+            toast.info("Proceeding with audio assessment mode.");
+        }
+
+        proceedWithInterview();
+    };
+
+    // Actual interview session initiation
+    const proceedWithInterview = () => {
         setState(InterviewState.GREETING);
 
         // Construct the first message with the first question
@@ -365,6 +410,12 @@ const Agent = ({
             silenceTimerRef.current = null;
         }
 
+        if (cameraStream) {
+            cameraStream.getTracks().forEach((track) => track.stop());
+            setCameraStream(null);
+            setIsCameraActive(false);
+        }
+
         isProcessingRef.current = false;
         setState(InterviewState.FINISHED);
     };
@@ -391,29 +442,21 @@ const Agent = ({
     return (
         <>
             {/* Pre-Exam Voice Guidelines Notice */}
-            <div className="w-full mb-6 p-4 rounded-2xl bg-yellow-500/10 border border-yellow-500/30 flex items-start gap-3.5 shadow-lg shadow-yellow-500/5">
-                <div className="w-9 h-9 rounded-xl bg-yellow-500/20 border border-yellow-500/30 flex items-center justify-center text-yellow-400 shrink-0 mt-0.5">
-                    <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        className="w-5 h-5"
-                    >
-                        <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
-                        <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-                        <line x1="12" x2="12" y1="19" y2="22" />
-                    </svg>
+            <div className="w-full mb-6 p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-start gap-3.5 shadow-lg shadow-amber-500/5">
+                <div className="w-9 h-9 rounded-xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-300 shrink-0 mt-0.5">
+                    <ShieldCheck size={20} className="text-amber-400" />
                 </div>
                 <div className="flex flex-col gap-1">
-                    <h4 className="text-sm font-bold text-yellow-300 tracking-wide uppercase flex items-center gap-2">
-                        Pre-Interview Voice Notice
-                    </h4>
-                    <p className="text-xs sm:text-sm text-yellow-200/90 leading-relaxed">
-                        This is an AI-based voice interview. Please <strong>speak loud and clear</strong> when answering each question. Ensure your microphone permissions are granted and ambient noise is minimized for the most accurate transcription and scoring.
+                    <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-amber-300 tracking-wide uppercase">
+                            Proctored AI Assessment Notice
+                        </span>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-400/20 text-amber-300 border border-amber-400/30 font-semibold uppercase">
+                            Camera & Mic Required
+                        </span>
+                    </div>
+                    <p className="text-xs sm:text-sm text-amber-200/90 leading-relaxed">
+                        This is an AI-based interview. Try to be <strong>loud and clear with your answers</strong> and <strong>do not take long pauses</strong>. Both your camera and microphone are monitored for the integrity of this mock assessment.
                     </p>
                 </div>
             </div>
@@ -437,16 +480,51 @@ const Agent = ({
                     <h3>AI Interviewer</h3>
                 </div>
 
-                {/* User Profile Card */}
+                {/* Candidate Profile / Live Proctored Camera Card */}
                 <div className="card-border">
-                    <div className="card-content">
-                        <Image
-                            src="/user-avatar.png"
-                            alt="User"
-                            width={539}
-                            height={539}
-                            className="rounded-full object-cover size-[120px]"
-                        />
+                    <div className="card-content relative overflow-hidden">
+                        {isCameraActive && cameraStream ? (
+                            <div className="relative w-full h-[320px] rounded-xl overflow-hidden bg-black/60 border border-emerald-500/30 flex items-center justify-center">
+                                <video
+                                    ref={videoRef}
+                                    autoPlay
+                                    playsInline
+                                    muted
+                                    className="w-full h-full object-cover -scale-x-100"
+                                />
+
+                                {/* Live Monitored Watermark */}
+                                <div className="absolute top-3 left-3 flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-black/70 backdrop-blur-md border border-emerald-500/30 text-[10px] font-bold tracking-wider uppercase text-emerald-400">
+                                    <span className="size-2 rounded-full bg-emerald-400 animate-pulse" />
+                                    <span>AI Monitored</span>
+                                </div>
+
+                                <div className="absolute bottom-3 right-3 flex items-center gap-1 px-2 py-0.5 rounded-md bg-black/60 backdrop-blur-md text-[10px] text-white/70">
+                                    <Eye size={12} className="text-cyan-400" />
+                                    <span>Active Feed</span>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="flex flex-col items-center justify-center gap-3">
+                                <div className="relative">
+                                    <Image
+                                        src="/user-avatar.png"
+                                        alt="User"
+                                        width={539}
+                                        height={539}
+                                        className="rounded-full object-cover size-[120px] border-2 border-white/10"
+                                    />
+                                    {state !== InterviewState.IDLE && (
+                                        <div className="absolute bottom-0 right-0 p-1.5 rounded-full bg-dark-200 border border-white/10 text-light-100/60" title="Audio-only mode">
+                                            <VideoOff size={14} />
+                                        </div>
+                                    )}
+                                </div>
+                                <div className="text-xs text-light-100/40">
+                                    {state === InterviewState.IDLE ? "Awaiting hardware check" : "Audio-only session"}
+                                </div>
+                            </div>
+                        )}
                         <h3>{userName}</h3>
                     </div>
                 </div>
@@ -664,6 +742,15 @@ const Agent = ({
                     </p>
                 </div>
             )}
+
+            {/* Proctoring Verification & Hardware Access Modal */}
+            <ProctorCheckModal
+                isOpen={showProctorModal}
+                onConfirm={handleConfirmProctorCheck}
+                onCancel={() => setShowProctorModal(false)}
+                userName={userName}
+                role={role || "Mock Interview"}
+            />
         </>
     );
 };

@@ -864,9 +864,14 @@ export function RobotHero({
         </h1>
       </div>
 
-      {/* 3D Canvas */}
+      {/* 3D Canvas / Dynamic Section Render */}
       <div className="absolute inset-0 z-10">
-        <Canvas shadows camera={{ position: [0, 0.2, 5.8], fov: 40 }}>
+        <Canvas
+          shadows
+          dpr={[1, 1.5]}
+          gl={{ powerPreference: "high-performance", antialias: true, alpha: true }}
+          camera={{ position: [0, 0.2, 5.8], fov: 40 }}
+        >
           <ambientLight intensity={entorno.luzAmbiente} color="#ffffff" />
 
           <directionalLight
@@ -874,7 +879,7 @@ export function RobotHero({
             intensity={entorno.luzPrincipal}
             color={entorno.luzPrincipalColor}
             castShadow
-            shadow-mapSize={[2048, 2048]}
+            shadow-mapSize={[1024, 1024]}
             shadow-bias={-0.0005}
           />
 
@@ -890,8 +895,8 @@ export function RobotHero({
             <ContactShadows
               position={[0, -0.79, 0]}
               opacity={entorno.sombraOpacidad}
-              scale={15}
-              resolution={1024}
+              scale={12}
+              resolution={512}
               blur={entorno.sombraBlur}
               far={2.5}
               color="#000000"

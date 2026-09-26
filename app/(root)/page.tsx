@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Sparkles, BrainCircuit, ShieldCheck, Zap } from "lucide-react";
 
-import { RobotHero } from "@/components/ui/robot-hero";
+import { LazyRobotHero } from "@/components/ui/lazy-robot-hero";
 import InterviewCard from "@/components/InterviewCard";
 import { getCurrentUser } from "@/lib/actions/auth.action";
 import {
@@ -30,8 +30,8 @@ export default async function Home() {
 
     return (
         <div className="flex flex-col gap-12 w-full">
-            {/* 3D Interactive Robot Hero Section */}
-            <RobotHero
+            {/* 3D Interactive Robot Hero Section (Progressive Lazy Load) */}
+            <LazyRobotHero
                 backgroundText="INTUIPREP"
                 ctaText={user ? "Start Interview" : "Get Started Free"}
                 contactText={user ? "View Interviews" : "Sign In"}
