@@ -6,7 +6,6 @@ import { RobotHeroProps } from "./robot-hero";
 // Sleek lightweight placeholder that renders immediately with zero WebGL overhead
 function RobotHeroSkeleton({
   backgroundText = "INTUIPREP",
-  ctaText = "Start Interview",
 }: {
   backgroundText?: string;
   ctaText?: string;

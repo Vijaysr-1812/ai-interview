@@ -347,7 +347,7 @@ const AuthForm = ({ type }: { type: FormType }) => {
                     <div className="bg-[#12121e] border border-white/10 rounded-2xl p-6 max-w-md w-full shadow-2xl relative">
                         <h3 className="text-lg font-bold text-light-100 mb-2">Reset Your Password</h3>
                         <p className="text-sm text-muted-foreground mb-4">
-                            Enter your email address and we'll send you a link to reset your password.
+                            Enter your email address and we&apos;ll send you a link to reset your password.
                         </p>
                         <form onSubmit={handleSendPasswordReset} className="space-y-4">
                             <div>

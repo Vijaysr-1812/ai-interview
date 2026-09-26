@@ -17,7 +17,7 @@ import {
     isSpeechSynthesisSupported,
 } from "@/lib/speech";
 import { ProctorCheckModal } from "@/components/ProctorCheckModal";
-import { Camera, ShieldCheck, Eye, VideoOff, Mic } from "lucide-react";
+import { ShieldCheck, Eye, VideoOff } from "lucide-react";
 
 enum InterviewState {
     IDLE = "IDLE",
