@@ -13,7 +13,14 @@ function getFirebaseAdmin() {
             process.env.FIREBASE_PRIVATE_KEY
         ) {
             try {
-                const rawKey = process.env.FIREBASE_PRIVATE_KEY;
+                let rawKey = process.env.FIREBASE_PRIVATE_KEY.trim();
+                // Strip outer surrounding quotes if pasted into Vercel UI with quotes
+                if (
+                    (rawKey.startsWith('"') && rawKey.endsWith('"')) ||
+                    (rawKey.startsWith("'") && rawKey.endsWith("'"))
+                ) {
+                    rawKey = rawKey.slice(1, -1);
+                }
                 const formattedKey = rawKey
                     .replace(/\\\+/g, "+")
                     .replace(/\\n/g, "\n");
@@ -27,7 +34,7 @@ function getFirebaseAdmin() {
                 });
                 initialized = true;
             } catch (err) {
-                console.warn("[Firebase Admin] Certificate init warning:", err);
+                console.error("[Firebase Admin] Certificate init error:", err);
             }
         }
 
