@@ -114,28 +114,29 @@ const AuthForm = ({ type }: { type: FormType }) => {
                 });
 
                 if (result && !result.success) {
-                    toast.error(result.message);
+                    toast.error(result.message || "Failed to log in.");
                     return;
                 }
 
-                toast.success("Signed in successfully.");
-                router.push("/");
+                toast.success("Signed in successfully! Redirecting...");
+                // Use hard navigation to ensure session cookie is sent to server layout
+                window.location.href = "/";
             }
         } catch (err) {
-            const error = err as { code?: string };
+            const error = err as { code?: string; message?: string };
             console.error("Auth error:", error);
 
             // User-friendly Firebase error messages
             if (error.code === "auth/user-not-found") {
                 toast.error("No account found with this email. Please sign up.");
             } else if (error.code === "auth/wrong-password" || error.code === "auth/invalid-credential") {
-                toast.error("Invalid email or password. Please try again.");
+                toast.error("Invalid email or password. Please check your credentials.");
             } else if (error.code === "auth/email-already-in-use") {
                 toast.error("An account with this email already exists. Please sign in.");
             } else if (error.code === "auth/too-many-requests") {
                 toast.error("Too many attempts. Please wait a moment and try again.");
             } else {
-                toast.error("An unexpected error occurred. Please try again.");
+                toast.error(error.message || "An unexpected error occurred. Please try again.");
             }
         } finally {
             setIsLoading(false);
