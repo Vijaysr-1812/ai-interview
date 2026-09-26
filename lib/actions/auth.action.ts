@@ -103,6 +103,43 @@ export async function signIn(params: SignInParams) {
     }
 }
 
+export async function signInWithGoogle(params: {
+    uid: string;
+    email: string;
+    name: string;
+    idToken: string;
+}) {
+    const { uid, email, name, idToken } = params;
+
+    try {
+        // Upsert user into Firestore
+        const userRef = db.collection("users").doc(uid);
+        const userDoc = await userRef.get();
+
+        if (!userDoc.exists) {
+            await userRef.set({
+                name: name || "User",
+                email,
+            });
+        }
+
+        // Set session cookie
+        await setSessionCookie(idToken);
+
+        return {
+            success: true,
+            message: "Signed in successfully with Google.",
+        };
+    } catch (err) {
+        const error = err as { message?: string };
+        console.error("Error signing in with Google:", err);
+        return {
+            success: false,
+            message: error?.message || "Failed to sign in with Google.",
+        };
+    }
+}
+
 // Sign out user by clearing the session cookie
 export async function signOut() {
     const cookieStore = await cookies();
