@@ -93,11 +93,12 @@ export async function signIn(params: SignInParams) {
             message: "Signed in successfully.",
         };
     } catch (err) {
-        console.error("Error signing in:", err);
+        const error = err as { message?: string; code?: string };
+        console.error("Error signing in (server action):", err);
 
         return {
             success: false,
-            message: "Failed to log into account. Please try again.",
+            message: error?.message || "Failed to log into account. Please check your credentials.",
         };
     }
 }
